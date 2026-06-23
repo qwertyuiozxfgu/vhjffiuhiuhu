@@ -1,4 +1,5 @@
 import logging
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters
@@ -206,9 +207,13 @@ async def af_custom_level_entered(update: Update, context: ContextTypes.DEFAULT_
 
     await update.message.reply_text("🔄 *جاري الإرسال...*", parse_mode="Markdown")
 
-    # Determine event name pattern for custom level
-    # Use a generic level event name pattern
-    base_event_name = f"af_level_{level}_completed"
+    # استخدام نفس نمط اسم الحدث الخاص باللعبة مع استبدال رقم اللفل بالرقم المخصص
+    events = db.get_af_events(game_id)
+    level_event = next((e for e in events if e.get("event_type") == "level"), None)
+    if level_event:
+        base_event_name = re.sub(r'\d+', str(level), level_event["event_name"], count=1)
+    else:
+        base_event_name = f"af_level_{level}_completed"
 
     status, resp = send_af(
         pkg=game.get("package", ""),
