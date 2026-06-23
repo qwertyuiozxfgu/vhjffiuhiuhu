@@ -6,7 +6,6 @@ from telegram.ext import (
 
 from src.config import ADMIN_IDS
 from src.database import queries as db
-from src.services.binance import verify_usdt_deposit
 from src.middlewares.auth import allow_free_access
 from src.utils.navigation import nav_push, nav_clear
 
@@ -137,52 +136,51 @@ async def sub_usdt_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan = context.user_data.get("sub_plan", {})
     setting = context.user_data.get("sub_setting", {})
 
-    await update.message.reply_text("⏳ *جاري التحقق من العملية...*", parse_mode="Markdown")
+    req_id = db.create_payment_request(
+        user_id=user.id,
+        user_name=user.full_name or "",
+        user_username=user.username or "",
+        plan_id=plan.get("id", 0),
+        plan_name=plan.get("name", ""),
+        method="usdt",
+        amount=float(plan.get("price", 0)),
+        proof_file_id=tx_id,
+    )
 
-    api_key = setting.get("binance_api_key", "")
-    api_secret = setting.get("binance_api_secret", "")
-    expected = float(plan.get("price", 0))
+    await update.message.reply_text(
+        "✅ *تم استلام طلبك!*\n\n"
+        "📋 جاري مراجعة العملية من قِبل الإدارة — يرجى الانتظار بضع دقائق.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")
+        ]]),
+    )
 
-    verified, msg = verify_usdt_deposit(api_key, api_secret, tx_id, expected)
-
-    if verified:
-        db.create_subscription(
-            user_id=user.id,
-            plan_id=plan["id"],
-            plan_name=plan["name"],
-            duration_days=plan["duration_days"],
-            daily_limit=plan["daily_limit"],
-        )
-        db.process_payment_request_auto(
-            user_id=user.id,
-            user_name=user.full_name or "",
-            user_username=user.username or "",
-            plan_id=plan["id"],
-            plan_name=plan["name"],
-            method="usdt",
-            amount=expected,
-            transaction_id=tx_id,
-        )
-        await update.message.reply_text(
-            f"🎉 *تم تفعيل اشتراكك!*\n\n"
-            f"📦 الباقة: *{plan['name']}*\n"
-            f"📊 الحد اليومي: `{plan['daily_limit']}` عملية\n"
-            f"⏳ مدة الباقة: `{plan['duration_days']}` يوم\n\n"
-            f"{msg}",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")
-            ]]),
-        )
-    else:
-        await update.message.reply_text(
-            f"❌ *فشل التحقق*\n\n{msg}\n\nتأكد من رقم العملية وأعد المحاولة أو تواصل مع الإدارة.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 رجوع", callback_data="sub_menu"),
-                InlineKeyboardButton("🏠 القائمة", callback_data="main_menu")
-            ]]),
-        )
+    for admin_id in ADMIN_IDS:
+        try:
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ قبول", callback_data=f"sub_approve_{req_id}"),
+                    InlineKeyboardButton("❌ رفض", callback_data=f"sub_reject_{req_id}"),
+                ]
+            ])
+            text = (
+                f"💎 *طلب اشتراك USDT جديد* #{req_id}\n\n"
+                f"👤 المستخدم: {user.full_name} (`{user.id}`)\n"
+                f"🔖 يوزر: @{user.username or '-'}\n"
+                f"📦 الباقة: *{plan.get('name','')}*\n"
+                f"💰 المبلغ: `{plan.get('price',0)}$` USDT\n"
+                f"💳 طريقة الدفع: USDT (TRC20)\n\n"
+                f"🔗 *رقم العملية (TxID):*\n`{tx_id}`"
+            )
+            await update.get_bot().send_message(
+                chat_id=admin_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=kb,
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify admin {admin_id}: {e}")
 
     return ConversationHandler.END
 
@@ -351,10 +349,16 @@ async def sub_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.process_payment_request(req_id, "approved", admin_id)
 
     try:
-        await query.edit_message_caption(
-            query.message.caption + "\n\n✅ *تم القبول*",
-            parse_mode="Markdown",
-        )
+        if query.message.photo:
+            await query.edit_message_caption(
+                (query.message.caption or "") + "\n\n✅ *تم القبول*",
+                parse_mode="Markdown",
+            )
+        else:
+            await query.edit_message_text(
+                (query.message.text or "") + "\n\n✅ *تم القبول*",
+                parse_mode="Markdown",
+            )
     except Exception:
         pass
 
@@ -394,10 +398,16 @@ async def sub_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.process_payment_request(req_id, "rejected", admin_id)
 
     try:
-        await query.edit_message_caption(
-            query.message.caption + "\n\n❌ *تم الرفض*",
-            parse_mode="Markdown",
-        )
+        if query.message.photo:
+            await query.edit_message_caption(
+                (query.message.caption or "") + "\n\n❌ *تم الرفض*",
+                parse_mode="Markdown",
+            )
+        else:
+            await query.edit_message_text(
+                (query.message.text or "") + "\n\n❌ *تم الرفض*",
+                parse_mode="Markdown",
+            )
     except Exception:
         pass
 
